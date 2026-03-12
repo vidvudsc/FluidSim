@@ -25,11 +25,15 @@ typedef struct UiPanelState {
     int actualParticleCount;
     int mode;
     int obstacleModel;
+    float obstacleAngleDegrees;
+    float obstacleRectWidth;
+    float obstacleRectHeight;
     int viewMode;
     int colorMode;
     bool paused;
     bool gpuBackendAvailable;
     float windSpeedScale;
+    float flowMach;
     bool acousticsAvailable;
     bool acousticsEnabled;
     float speakerFrequency;
@@ -61,6 +65,12 @@ typedef struct UiPanelActions {
     int mode;
     bool setObstacleModel;
     int obstacleModel;
+    bool setObstacleAngleDegrees;
+    float obstacleAngleDegrees;
+    bool setObstacleRectWidth;
+    float obstacleRectWidth;
+    bool setObstacleRectHeight;
+    float obstacleRectHeight;
     bool setViewMode;
     int viewMode;
     bool setColorMode;

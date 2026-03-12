@@ -133,7 +133,7 @@ void UiPanelDraw(const UiPanelState *state, UiPanelActions *actions)
     static const char *const gpuCountLabels[] = {"30k", "60k", "120k", "180k", "250k"};
     static const int gpuCounts[] = {30000, 60000, 120000, 180000, 250000};
     static const char *const modeLabels[] = {"Water tank", "Gas tank", "Wind tunnel"};
-    static const char *const obstacleLabels[] = {"Circle", "Airfoil", "Car"};
+    static const char *const obstacleLabels[] = {"Circle", "Airfoil", "Car", "Rectangle"};
     static const char *const viewLabels[] = {"Particles", "Smoothing"};
     static const char *const colorLabels[] = {"Material", "Temperature", "Pressure", "Speed", "Density"};
 
@@ -142,6 +142,9 @@ void UiPanelDraw(const UiPanelState *state, UiPanelActions *actions)
     int backend = state->backend;
     int mode = state->mode;
     int obstacleModel = state->obstacleModel;
+    float obstacleAngleDegrees = state->obstacleAngleDegrees;
+    float obstacleRectWidth = state->obstacleRectWidth;
+    float obstacleRectHeight = state->obstacleRectHeight;
     int viewMode = state->viewMode;
     int colorMode = state->colorMode;
     float windSpeedScale = state->windSpeedScale;
@@ -178,6 +181,9 @@ void UiPanelDraw(const UiPanelState *state, UiPanelActions *actions)
         ImGui::Text("Particles %d / %d", state->actualParticleCount, state->targetParticleCount);
         ImGui::Text("FPS %.1f", state->fps);
         ImGui::Text("Step %.2f ms", (float)state->lastSimStepMs);
+        if (state->flowMach > 0.0f) {
+            ImGui::Text("Mach %.2f", state->flowMach);
+        }
         ImGui::SetWindowFontScale(1.18f);
 
         if (ImGui::CollapsingHeader("Simulation", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -233,7 +239,7 @@ void UiPanelDraw(const UiPanelState *state, UiPanelActions *actions)
             }
 
             bool obstacleChanged = false;
-            DrawCombo("Wind shape", obstacleLabels[obstacleModel], obstacleLabels, 3, obstacleModel, &obstacleModel,
+            DrawCombo("Wind shape", obstacleLabels[obstacleModel], obstacleLabels, 4, obstacleModel, &obstacleModel,
                 &obstacleChanged, mode != UI_MODE_WIND_TUNNEL);
             if (obstacleChanged) {
                 actions->setObstacleModel = true;
@@ -249,6 +255,23 @@ void UiPanelDraw(const UiPanelState *state, UiPanelActions *actions)
                     actions->setWindSpeedScale = true;
                     actions->windSpeedScale = windSpeedScale;
                 }
+                ImGui::TextDisabled("Current Mach %.2f", state->flowMach);
+
+                if (ImGui::SliderFloat("Obstacle angle", &obstacleAngleDegrees, -180.0f, 180.0f, "%.0f deg")) {
+                    actions->setObstacleAngleDegrees = true;
+                    actions->obstacleAngleDegrees = obstacleAngleDegrees;
+                }
+
+                ImGui::BeginDisabled(obstacleModel != 3);
+                if (ImGui::SliderFloat("Rect width", &obstacleRectWidth, 40.0f, 360.0f, "%.0f px")) {
+                    actions->setObstacleRectWidth = true;
+                    actions->obstacleRectWidth = obstacleRectWidth;
+                }
+                if (ImGui::SliderFloat("Rect height", &obstacleRectHeight, 24.0f, 220.0f, "%.0f px")) {
+                    actions->setObstacleRectHeight = true;
+                    actions->obstacleRectHeight = obstacleRectHeight;
+                }
+                ImGui::EndDisabled();
             }
         }
 

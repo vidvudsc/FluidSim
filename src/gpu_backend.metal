@@ -42,6 +42,10 @@ struct GpuSimParams {
     float obstacleCenterX;
     float obstacleCenterY;
     float obstacleRadius;
+    float obstacleAngleCos;
+    float obstacleAngleSin;
+    float obstacleRectHalfWidth;
+    float obstacleRectHalfHeight;
     float obstacleShell;
     float obstacleStrength;
     float obstacleDamping;
@@ -57,6 +61,7 @@ struct GpuSimParams {
     float speakerShell;
     float speakerStrength;
     float speakerDamping;
+    float simulationTime;
     float substepDt;
 };
 
@@ -67,74 +72,95 @@ constant uint SCENE_WIND_TUNNEL = 1u;
 constant uint OBSTACLE_CIRCLE = 0u;
 constant uint OBSTACLE_AIRFOIL = 1u;
 constant uint OBSTACLE_CAR = 2u;
+constant uint OBSTACLE_RECTANGLE = 3u;
 constant float TEMP_MIN = 0.35f;
 constant float TEMP_MAX = 2.50f;
 constant float PI_F = 3.14159265358979323846f;
-constant uint AIRFOIL_OUTLINE_POINT_COUNT = 34u;
+constant uint AIRFOIL_OUTLINE_POINT_COUNT = 45u;
 constant float2 AIRFOIL_OUTLINE_POINTS[AIRFOIL_OUTLINE_POINT_COUNT] = {
-    float2(2.0003f, 0.0050f),
-    float2(1.9666f, 0.0120f),
-    float2(1.8664f, 0.0323f),
-    float2(1.7031f, 0.0639f),
-    float2(1.4818f, 0.1037f),
-    float2(1.2099f, 0.1484f),
-    float2(0.8964f, 0.1943f),
-    float2(0.5518f, 0.2375f),
-    float2(0.1878f, 0.2745f),
-    float2(-0.1832f, 0.3018f),
-    float2(-0.5495f, 0.3161f),
-    float2(-0.8988f, 0.3119f),
-    float2(-1.2168f, 0.2886f),
-    float2(-1.4918f, 0.2482f),
-    float2(-1.7140f, 0.1945f),
-    float2(-1.8759f, 0.1322f),
-    float2(-1.9721f, 0.0662f),
-    float2(-2.0000f, 0.0000f),
-    float2(-1.9598f, -0.0594f),
-    float2(-1.8540f, -0.1064f),
-    float2(-1.6868f, -0.1402f),
-    float2(-1.4642f, -0.1609f),
-    float2(-1.1937f, -0.1692f),
-    float2(-0.8841f, -0.1670f),
-    float2(-0.5451f, -0.1574f),
-    float2(-0.1859f, -0.1431f),
-    float2(0.1813f, -0.1239f),
-    float2(0.5429f, -0.1024f),
-    float2(0.8865f, -0.0806f),
-    float2(1.2006f, -0.0600f),
-    float2(1.4742f, -0.0417f),
-    float2(1.6978f, -0.0264f),
-    float2(1.8635f, -0.0148f),
-    float2(1.9653f, -0.0075f),
+    float2(1.9919f, 0.0067f),
+    float2(1.9415f, 0.0171f),
+    float2(1.8914f, 0.0272f),
+    float2(1.7439f, 0.0560f),
+    float2(1.6478f, 0.0738f),
+    float2(1.4138f, 0.1149f),
+    float2(1.2779f, 0.1372f),
+    float2(0.9748f, 0.1828f),
+    float2(0.8103f, 0.2051f),
+    float2(0.4608f, 0.2467f),
+    float2(0.2788f, 0.2653f),
+    float2(-0.0905f, 0.2950f),
+    float2(-0.2748f, 0.3054f),
+    float2(-0.6368f, 0.3150f),
+    float2(-0.8115f, 0.3130f),
+    float2(-1.1373f, 0.2944f),
+    float2(-1.2856f, 0.2785f),
+    float2(-1.5474f, 0.2348f),
+    float2(-1.6584f, 0.2079f),
+    float2(-1.8354f, 0.1478f),
+    float2(-1.9000f, 0.1157f),
+    float2(-1.9791f, 0.0496f),
+    float2(-1.9899f, -0.0149f),
+    float2(-1.9699f, -0.0445f),
+    float2(-1.8805f, -0.0946f),
+    float2(-1.8122f, -0.1148f),
+    float2(-1.6312f, -0.1454f),
+    float2(-1.5198f, -0.1557f),
+    float2(-1.2613f, -0.1671f),
+    float2(-1.1163f, -0.1686f),
+    float2(-0.7994f, -0.1646f),
+    float2(-0.6299f, -0.1598f),
+    float2(-0.2757f, -0.1467f),
+    float2(-0.0941f, -0.1383f),
+    float2(0.2717f, -0.1185f),
+    float2(0.4525f, -0.1078f),
+    float2(0.8006f, -0.0861f),
+    float2(0.9650f, -0.0755f),
+    float2(1.2690f, -0.0554f),
+    float2(1.4058f, -0.0463f),
+    float2(1.6419f, -0.0302f),
+    float2(1.7392f, -0.0235f),
+    float2(1.8889f, -0.0130f),
+    float2(1.9399f, -0.0093f),
+    float2(1.9916f, 0.0019f),
 };
-constant uint CAR_OUTLINE_POINT_COUNT = 26u;
+constant uint CAR_OUTLINE_POINT_COUNT = 35u;
 constant float2 CAR_OUTLINE_POINTS[CAR_OUTLINE_POINT_COUNT] = {
-    float2(-2.18f, 0.16f),
-    float2(-2.10f, -0.02f),
-    float2(-1.94f, -0.16f),
-    float2(-1.68f, -0.22f),
-    float2(-1.34f, -0.26f),
-    float2(-0.98f, -0.36f),
-    float2(-0.60f, -0.50f),
-    float2(-0.16f, -0.56f),
-    float2(0.28f, -0.56f),
-    float2(0.70f, -0.50f),
-    float2(1.06f, -0.42f),
-    float2(1.34f, -0.34f),
-    float2(1.58f, -0.28f),
-    float2(1.82f, -0.30f),
-    float2(2.06f, -0.40f),
-    float2(2.16f, -0.18f),
-    float2(2.16f, 0.10f),
-    float2(1.98f, 0.18f),
-    float2(1.58f, 0.20f),
-    float2(1.08f, 0.20f),
-    float2(0.56f, 0.20f),
-    float2(0.04f, 0.20f),
-    float2(-0.48f, 0.20f),
-    float2(-1.02f, 0.20f),
-    float2(-1.50f, 0.20f),
-    float2(-1.90f, 0.18f),
+    float2(-2.1600f, 0.1150f),
+    float2(-2.0600f, -0.0550f),
+    float2(-1.9800f, -0.1250f),
+    float2(-1.8750f, -0.1750f),
+    float2(-1.5950f, -0.2300f),
+    float2(-1.2500f, -0.2850f),
+    float2(-1.0700f, -0.3350f),
+    float2(-0.8850f, -0.3950f),
+    float2(-0.4900f, -0.5150f),
+    float2(-0.0500f, -0.5600f),
+    float2(0.1700f, -0.5600f),
+    float2(0.3850f, -0.5450f),
+    float2(0.7900f, -0.4800f),
+    float2(1.1300f, -0.4000f),
+    float2(1.2700f, -0.3600f),
+    float2(1.4000f, -0.3250f),
+    float2(1.6400f, -0.2850f),
+    float2(1.8800f, -0.3250f),
+    float2(2.0000f, -0.3750f),
+    float2(2.1050f, -0.2550f),
+    float2(2.1600f, -0.1100f),
+    float2(2.1150f, 0.1200f),
+    float2(2.0250f, 0.1600f),
+    float2(1.8800f, 0.1850f),
+    float2(1.4550f, 0.2000f),
+    float2(0.9500f, 0.2000f),
+    float2(0.6900f, 0.2000f),
+    float2(0.4300f, 0.2000f),
+    float2(-0.0900f, 0.2000f),
+    float2(-0.6150f, 0.2000f),
+    float2(-0.8850f, 0.2000f),
+    float2(-1.1400f, 0.2000f),
+    float2(-1.6000f, 0.1950f),
+    float2(-1.9700f, 0.1750f),
+    float2(-2.1100f, 0.1650f),
 };
 
 inline float clampf(float value, float minValue, float maxValue)
@@ -152,6 +178,18 @@ inline float pow7(float x)
     float x2 = x * x;
     float x4 = x2 * x2;
     return x4 * x2 * x;
+}
+
+inline uint hashUint32(uint x)
+{
+    x = x * 747796405u + 2891336453u;
+    x = ((x >> ((x >> 28u) + 4u)) ^ x) * 277803737u;
+    return (x >> 22u) ^ x;
+}
+
+inline float hashNoise(uint x)
+{
+    return float(hashUint32(x) & 0x00FFFFFFu) / float(0x00FFFFFFu);
 }
 
 inline float sdRoundedBox(float2 p, float2 halfExtents, float radius)
@@ -235,6 +273,55 @@ inline float windTunnelProfile(constant GpuSimParams &params, float y)
     return max(0.12f, 1.0f - centered * centered);
 }
 
+inline void respawnWindTunnelParticle(constant GpuSimParams &params,
+    uint particleIndex,
+    thread float &x,
+    thread float &y,
+    thread float &vx,
+    thread float &vy,
+    thread float &temperature)
+{
+    float radius = params.particleRadius;
+    float left = params.boundsX + radius;
+    float top = params.boundsY + radius;
+    float bottom = params.boundsY + params.boundsHeight - radius;
+    float inletDepth = max(params.supportRadius * 1.6f, radius * 4.0f);
+    float tunnelHeight = max(bottom - top, radius * 2.0f);
+    uint timeKey = (uint)floor(params.simulationTime * 1536.0f);
+    uint seedBase = timeKey + particleIndex * 97u;
+    float baseY = top + hashNoise(seedBase + 17u) * tunnelHeight;
+    float yJitter = (hashNoise(seedBase + 41u) - 0.5f) * params.supportRadius * 0.11f;
+    float particleY = clampf(baseY + yJitter, top, bottom);
+    float profile = windTunnelProfile(params, particleY);
+
+    x = left + hashNoise(seedBase + 73u) * inletDepth;
+    y = particleY;
+    vx = params.flowTargetSpeed * profile +
+        (hashNoise(seedBase + 109u) - 0.5f) * params.soundSpeed * 0.020f;
+    vy = (hashNoise(seedBase + 149u) - 0.5f) * params.soundSpeed * 0.014f;
+    temperature = clampf(
+        params.ambientTemperature + (hashNoise(seedBase + 181u) - 0.5f) * 0.02f,
+        TEMP_MIN,
+        TEMP_MAX);
+}
+
+inline float2 rotateByAngle(float2 p, float cosAngle, float sinAngle)
+{
+    return float2(
+        cosAngle * p.x - sinAngle * p.y,
+        sinAngle * p.x + cosAngle * p.y
+    );
+}
+
+inline float2 obstacleWorldToLocal(constant GpuSimParams &params, float x, float y)
+{
+    float2 p = float2(x - params.obstacleCenterX, y - params.obstacleCenterY);
+    return float2(
+        params.obstacleAngleCos * p.x + params.obstacleAngleSin * p.y,
+        -params.obstacleAngleSin * p.x + params.obstacleAngleCos * p.y
+    );
+}
+
 inline float obstacleSignedDistanceLocal(constant GpuSimParams &params, float2 p)
 {
     switch (params.obstacleModel) {
@@ -245,6 +332,8 @@ inline float obstacleSignedDistanceLocal(constant GpuSimParams &params, float2 p
             float r = params.obstacleRadius;
             return polygonSignedDistanceScaled(CAR_OUTLINE_POINTS, CAR_OUTLINE_POINT_COUNT, p, r);
         }
+        case OBSTACLE_RECTANGLE:
+            return sdRoundedBox(p, float2(params.obstacleRectHalfWidth, params.obstacleRectHalfHeight), 0.0f);
         case OBSTACLE_CIRCLE:
         default:
             return length(p) - params.obstacleRadius;
@@ -253,7 +342,7 @@ inline float obstacleSignedDistanceLocal(constant GpuSimParams &params, float2 p
 
 inline float obstacleSignedDistance(constant GpuSimParams &params, float x, float y)
 {
-    return obstacleSignedDistanceLocal(params, float2(x - params.obstacleCenterX, y - params.obstacleCenterY));
+    return obstacleSignedDistanceLocal(params, obstacleWorldToLocal(params, x, y));
 }
 
 inline float speakerSignedDistance(constant GpuSimParams &params, float x, float y)
@@ -470,16 +559,29 @@ inline void resolveObstacle(constant GpuSimParams &params, thread float &x, thre
         return;
     }
 
-    float surfaceOffset = params.particleRadius * 0.70f;
-    float signedDistance = obstacleSignedDistance(params, x, y);
-    if (signedDistance >= surfaceOffset) {
-        return;
+    float surfaceOffset = params.particleRadius *
+        ((params.obstacleModel == OBSTACLE_CAR) ? 1.20f : 0.70f);
+    float2 normal = float2(1.0f, 0.0f);
+    bool resolved = false;
+
+    uint maxIterations = (params.obstacleModel == OBSTACLE_CAR) ? 4u : 2u;
+    for (uint iteration = 0u; iteration < maxIterations; ++iteration) {
+        float signedDistance = obstacleSignedDistance(params, x, y);
+        if (signedDistance >= surfaceOffset) {
+            break;
+        }
+
+        normal = obstacleNormal(params, x, y);
+        float pushOut = (surfaceOffset - signedDistance) +
+            params.particleRadius * ((params.obstacleModel == OBSTACLE_CAR) ? 0.18f : 0.08f);
+        x += normal.x * pushOut;
+        y += normal.y * pushOut;
+        resolved = true;
     }
 
-    float2 normal = obstacleNormal(params, x, y);
-    float pushOut = surfaceOffset - signedDistance;
-    x += normal.x * pushOut;
-    y += normal.y * pushOut;
+    if (!resolved) {
+        return;
+    }
 
     float vn = vx * normal.x + vy * normal.y;
     if (vn < 0.0f) {
@@ -517,20 +619,24 @@ inline void resolveSpeaker(constant GpuSimParams &params, thread float &x, threa
     vy = 0.992f * vy + 0.008f * params.speakerVelocityY;
 }
 
-inline void resolveBounds(constant GpuSimParams &params, thread float &x, thread float &y, thread float &vx, thread float &vy)
+inline void resolveBounds(constant GpuSimParams &params,
+    uint particleIndex,
+    thread float &x,
+    thread float &y,
+    thread float &vx,
+    thread float &vy,
+    thread float &temperature)
 {
     float radius = params.particleRadius;
     float left = params.boundsX + radius;
     float right = params.boundsX + params.boundsWidth - radius;
     float top = params.boundsY + radius;
     float bottom = params.boundsY + params.boundsHeight - radius;
-    float width = right - left;
 
     if (sceneIsWindTunnel(params)) {
-        if (x < left) {
-            x = right - fmod(left - x, max(width, 1.0f));
-        } else if (x > right) {
-            x = left + fmod(x - right, max(width, 1.0f));
+        if (x < left || x > right) {
+            respawnWindTunnelParticle(params, particleIndex, x, y, vx, vy, temperature);
+            return;
         }
     } else if (x < left) {
         x = left;
@@ -834,7 +940,7 @@ kernel void integrateParticles(device float *x [[buffer(0)]],
         vyi *= 0.9992f;
     }
 
-    resolveBounds(params, px, py, vxi, vyi);
+    resolveBounds(params, id, px, py, vxi, vyi, nextTemperature);
     resolveSpeaker(params, px, py, vxi, vyi);
 
     x[id] = px;

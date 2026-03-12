@@ -1,5 +1,6 @@
 #include "raylib.h"
 #include "imgui_panel.h"
+#include "rlgl.h"
 
 #include <dispatch/dispatch.h>
 #include <float.h>
@@ -79,6 +80,7 @@ typedef enum ObstacleModel {
     OBSTACLE_CIRCLE = 0,
     OBSTACLE_AIRFOIL,
     OBSTACLE_CAR,
+    OBSTACLE_RECTANGLE,
     OBSTACLE_MODEL_COUNT
 } ObstacleModel;
 
@@ -155,6 +157,9 @@ typedef struct ParticleSystem {
     bool mouseActive;
     Vector2 obstacleCenter;
     float obstacleRadius;
+    float obstacleAngleDegrees;
+    float obstacleRectWidth;
+    float obstacleRectHeight;
     float obstacleShell;
     float obstacleStrength;
     float obstacleDamping;
@@ -283,6 +288,10 @@ typedef struct GpuSimParams {
     float obstacleCenterX;
     float obstacleCenterY;
     float obstacleRadius;
+    float obstacleAngleCos;
+    float obstacleAngleSin;
+    float obstacleRectHalfWidth;
+    float obstacleRectHalfHeight;
     float obstacleShell;
     float obstacleStrength;
     float obstacleDamping;
@@ -298,6 +307,7 @@ typedef struct GpuSimParams {
     float speakerShell;
     float speakerStrength;
     float speakerDamping;
+    float simulationTime;
     float substepDt;
 } GpuSimParams;
 
@@ -308,7 +318,7 @@ typedef struct GpuSimParams {
 - (void)invalidateGridBindings;
 - (BOOL)prepareForSystem:(ParticleSystem *)system error:(NSString * _Nullable * _Nullable)error;
 - (BOOL)runBuildDensityForceForSystem:(ParticleSystem *)system includeForce:(BOOL)includeForce error:(NSString * _Nullable * _Nullable)error;
-- (BOOL)runIntegrateForSystem:(ParticleSystem *)system dt:(float)dt error:(NSString * _Nullable * _Nullable)error;
+- (BOOL)runStepForSystem:(ParticleSystem *)system dt:(float)dt error:(NSString * _Nullable * _Nullable)error;
 
 @end
 #endif
@@ -316,6 +326,7 @@ typedef struct GpuSimParams {
 static int ClampCellCoord(int value, int maxValue);
 static void BuildGrid(ParticleSystem *system);
 static float SampleDensityAtSortedSlot(const ParticleSystem *system, int slot, float sampleMass);
+static float PressureFromState(const ParticleSystem *system, float density, float temperature);
 static void ResetSimulation(ParticleSystem *system, MaterialPreset preset);
 static bool InitializeGpuBackend(ParticleSystem *system);
 static void ShutdownGpuBackend(ParticleSystem *system);
@@ -612,9 +623,9 @@ static void SampleMicrophone(ParticleSystem *system)
         return;
     }
 
-    const float radius2 = system->micRadius * system->micRadius;
     float weightedPressure = 0.0f;
     float totalWeight = 0.0f;
+    const float radius2 = system->micRadius * system->micRadius;
     for (int i = 0; i < system->particleCount; ++i) {
         const float dx = system->x[i] - system->micPosition.x;
         const float dy = system->y[i] - system->micPosition.y;
@@ -795,72 +806,92 @@ static bool ShouldDrawSmoothingSample(int index, int drawStride)
 }
 
 static const Vector2 AIRFOIL_OUTLINE_POINTS[] = {
-    {2.0003f, 0.0050f},
-    {1.9666f, 0.0120f},
-    {1.8664f, 0.0323f},
-    {1.7031f, 0.0639f},
-    {1.4818f, 0.1037f},
-    {1.2099f, 0.1484f},
-    {0.8964f, 0.1943f},
-    {0.5518f, 0.2375f},
-    {0.1878f, 0.2745f},
-    {-0.1832f, 0.3018f},
-    {-0.5495f, 0.3161f},
-    {-0.8988f, 0.3119f},
-    {-1.2168f, 0.2886f},
-    {-1.4918f, 0.2482f},
-    {-1.7140f, 0.1945f},
-    {-1.8759f, 0.1322f},
-    {-1.9721f, 0.0662f},
-    {-2.0000f, 0.0000f},
-    {-1.9598f, -0.0594f},
-    {-1.8540f, -0.1064f},
-    {-1.6868f, -0.1402f},
-    {-1.4642f, -0.1609f},
-    {-1.1937f, -0.1692f},
-    {-0.8841f, -0.1670f},
-    {-0.5451f, -0.1574f},
-    {-0.1859f, -0.1431f},
-    {0.1813f, -0.1239f},
-    {0.5429f, -0.1024f},
-    {0.8865f, -0.0806f},
-    {1.2006f, -0.0600f},
-    {1.4742f, -0.0417f},
-    {1.6978f, -0.0264f},
-    {1.8635f, -0.0148f},
-    {1.9653f, -0.0075f},
+    {1.9919f, 0.0067f},
+    {1.9415f, 0.0171f},
+    {1.8914f, 0.0272f},
+    {1.7439f, 0.0560f},
+    {1.6478f, 0.0738f},
+    {1.4138f, 0.1149f},
+    {1.2779f, 0.1372f},
+    {0.9748f, 0.1828f},
+    {0.8103f, 0.2051f},
+    {0.4608f, 0.2467f},
+    {0.2788f, 0.2653f},
+    {-0.0905f, 0.2950f},
+    {-0.2748f, 0.3054f},
+    {-0.6368f, 0.3150f},
+    {-0.8115f, 0.3130f},
+    {-1.1373f, 0.2944f},
+    {-1.2856f, 0.2785f},
+    {-1.5474f, 0.2348f},
+    {-1.6584f, 0.2079f},
+    {-1.8354f, 0.1478f},
+    {-1.9000f, 0.1157f},
+    {-1.9791f, 0.0496f},
+    {-1.9899f, -0.0149f},
+    {-1.9699f, -0.0445f},
+    {-1.8805f, -0.0946f},
+    {-1.8122f, -0.1148f},
+    {-1.6312f, -0.1454f},
+    {-1.5198f, -0.1557f},
+    {-1.2613f, -0.1671f},
+    {-1.1163f, -0.1686f},
+    {-0.7994f, -0.1646f},
+    {-0.6299f, -0.1598f},
+    {-0.2757f, -0.1467f},
+    {-0.0941f, -0.1383f},
+    {0.2717f, -0.1185f},
+    {0.4525f, -0.1078f},
+    {0.8006f, -0.0861f},
+    {0.9650f, -0.0755f},
+    {1.2690f, -0.0554f},
+    {1.4058f, -0.0463f},
+    {1.6419f, -0.0302f},
+    {1.7392f, -0.0235f},
+    {1.8889f, -0.0130f},
+    {1.9399f, -0.0093f},
+    {1.9916f, 0.0019f},
 };
 
 static const int AIRFOIL_OUTLINE_POINT_COUNT =
     (int)(sizeof(AIRFOIL_OUTLINE_POINTS) / sizeof(AIRFOIL_OUTLINE_POINTS[0]));
 
 static const Vector2 CAR_OUTLINE_POINTS[] = {
-    {-2.18f, 0.16f},
-    {-2.10f, -0.02f},
-    {-1.94f, -0.16f},
-    {-1.68f, -0.22f},
-    {-1.34f, -0.26f},
-    {-0.98f, -0.36f},
-    {-0.60f, -0.50f},
-    {-0.16f, -0.56f},
-    {0.28f, -0.56f},
-    {0.70f, -0.50f},
-    {1.06f, -0.42f},
-    {1.34f, -0.34f},
-    {1.58f, -0.28f},
-    {1.82f, -0.30f},
-    {2.06f, -0.40f},
-    {2.16f, -0.18f},
-    {2.16f, 0.10f},
-    {1.98f, 0.18f},
-    {1.58f, 0.20f},
-    {1.08f, 0.20f},
-    {0.56f, 0.20f},
-    {0.04f, 0.20f},
-    {-0.48f, 0.20f},
-    {-1.02f, 0.20f},
-    {-1.50f, 0.20f},
-    {-1.90f, 0.18f},
+    {-2.1600f, 0.1150f},
+    {-2.0600f, -0.0550f},
+    {-1.9800f, -0.1250f},
+    {-1.8750f, -0.1750f},
+    {-1.5950f, -0.2300f},
+    {-1.2500f, -0.2850f},
+    {-1.0700f, -0.3350f},
+    {-0.8850f, -0.3950f},
+    {-0.4900f, -0.5150f},
+    {-0.0500f, -0.5600f},
+    {0.1700f, -0.5600f},
+    {0.3850f, -0.5450f},
+    {0.7900f, -0.4800f},
+    {1.1300f, -0.4000f},
+    {1.2700f, -0.3600f},
+    {1.4000f, -0.3250f},
+    {1.6400f, -0.2850f},
+    {1.8800f, -0.3250f},
+    {2.0000f, -0.3750f},
+    {2.1050f, -0.2550f},
+    {2.1600f, -0.1100f},
+    {2.1150f, 0.1200f},
+    {2.0250f, 0.1600f},
+    {1.8800f, 0.1850f},
+    {1.4550f, 0.2000f},
+    {0.9500f, 0.2000f},
+    {0.6900f, 0.2000f},
+    {0.4300f, 0.2000f},
+    {-0.0900f, 0.2000f},
+    {-0.6150f, 0.2000f},
+    {-0.8850f, 0.2000f},
+    {-1.1400f, 0.2000f},
+    {-1.6000f, 0.1950f},
+    {-1.9700f, 0.1750f},
+    {-2.1100f, 0.1650f},
 };
 
 static const int CAR_OUTLINE_POINT_COUNT =
@@ -902,6 +933,39 @@ static float PolygonSignedDistanceScaled(const Vector2 *points, int pointCount, 
     return inside ? -distance : distance;
 }
 
+static Vector2 RotateVector(Vector2 p, float radians)
+{
+    const float c = cosf(radians);
+    const float s = sinf(radians);
+    return (Vector2){
+        c * p.x - s * p.y,
+        s * p.x + c * p.y,
+    };
+}
+
+static float ObstacleAngleRadians(const ParticleSystem *system)
+{
+    return system->obstacleAngleDegrees * (PI_F / 180.0f);
+}
+
+static Vector2 ObstacleWorldToLocal(const ParticleSystem *system, float x, float y)
+{
+    const Vector2 p = {
+        x - system->obstacleCenter.x,
+        y - system->obstacleCenter.y,
+    };
+    return RotateVector(p, -ObstacleAngleRadians(system));
+}
+
+static Vector2 ObstacleLocalToWorld(const ParticleSystem *system, Vector2 local)
+{
+    const Vector2 rotated = RotateVector(local, ObstacleAngleRadians(system));
+    return (Vector2){
+        system->obstacleCenter.x + rotated.x,
+        system->obstacleCenter.y + rotated.y,
+    };
+}
+
 static float ObstacleSignedDistanceLocal(const ParticleSystem *system, Vector2 p)
 {
     switch (system->obstacleModel) {
@@ -912,6 +976,11 @@ static float ObstacleSignedDistanceLocal(const ParticleSystem *system, Vector2 p
             const float r = system->obstacleRadius;
             return PolygonSignedDistanceScaled(CAR_OUTLINE_POINTS, CAR_OUTLINE_POINT_COUNT, p, r);
         }
+        case OBSTACLE_RECTANGLE:
+            return RectangleSignedDistance(p, (Vector2){
+                system->obstacleRectWidth * 0.5f,
+                system->obstacleRectHeight * 0.5f,
+            });
         case OBSTACLE_CIRCLE:
         default:
             return sqrtf(p.x * p.x + p.y * p.y) - system->obstacleRadius;
@@ -920,7 +989,7 @@ static float ObstacleSignedDistanceLocal(const ParticleSystem *system, Vector2 p
 
 static float ObstacleSignedDistance(const ParticleSystem *system, float x, float y)
 {
-    return ObstacleSignedDistanceLocal(system, (Vector2){x - system->obstacleCenter.x, y - system->obstacleCenter.y});
+    return ObstacleSignedDistanceLocal(system, ObstacleWorldToLocal(system, x, y));
 }
 
 static Vector2 ObstacleNormal(const ParticleSystem *system, float x, float y)
@@ -968,9 +1037,15 @@ static void ConfigureSceneParameters(ParticleSystem *system)
             break;
         case OBSTACLE_CAR:
             system->obstacleRadius = fminf(system->bounds.width, system->bounds.height) * 0.062f;
-            system->obstacleShell = system->params.supportRadius * 1.20f;
-            system->obstacleStrength = system->params.soundSpeed * system->params.soundSpeed * 0.48f;
-            system->obstacleDamping = system->params.soundSpeed * 0.60f / fmaxf(system->params.supportRadius, 1.0f);
+            system->obstacleShell = system->params.supportRadius * 1.42f;
+            system->obstacleStrength = system->params.soundSpeed * system->params.soundSpeed * 0.66f;
+            system->obstacleDamping = system->params.soundSpeed * 0.78f / fmaxf(system->params.supportRadius, 1.0f);
+            break;
+        case OBSTACLE_RECTANGLE:
+            system->obstacleRadius = 0.5f * fmaxf(system->obstacleRectWidth, system->obstacleRectHeight);
+            system->obstacleShell = system->params.supportRadius * 1.12f;
+            system->obstacleStrength = system->params.soundSpeed * system->params.soundSpeed * 0.44f;
+            system->obstacleDamping = system->params.soundSpeed * 0.58f / fmaxf(system->params.supportRadius, 1.0f);
             break;
         case OBSTACLE_CIRCLE:
         default:
@@ -993,6 +1068,38 @@ static float WindTunnelProfile(const ParticleSystem *system, float y)
     const float t = ClampFloat(RangeLerp(top, bottom, y), 0.0f, 1.0f);
     const float centered = 2.0f * t - 1.0f;
     return fmaxf(0.12f, 1.0f - centered * centered);
+}
+
+static void RespawnWindTunnelParticle(ParticleSystem *system, int index)
+{
+    const float radius = system->params.particleRadius;
+    const float left = system->bounds.x + radius;
+    const float top = system->bounds.y + radius;
+    const float bottom = system->bounds.y + system->bounds.height - radius;
+    const float inletDepth = fmaxf(system->params.supportRadius * 1.6f, radius * 4.0f);
+    const float tunnelHeight = fmaxf(bottom - top, radius * 2.0f);
+    const int seedBase = (int)floorf(system->simulationTime * 1536.0f) + index * 97;
+    const float baseY = top + HashNoise(seedBase + 17) * tunnelHeight;
+    const float yJitter = (HashNoise(seedBase + 41) - 0.5f) * system->params.spacing * 0.22f;
+    const float particleY = ClampFloat(baseY + yJitter, top, bottom);
+    const float profile = WindTunnelProfile(system, particleY);
+
+    system->x[index] = left + HashNoise(seedBase + 73) * inletDepth;
+    system->y[index] = particleY;
+    system->vx[index] = system->flowTargetSpeed * profile +
+        (HashNoise(seedBase + 109) - 0.5f) * system->params.soundSpeed * 0.020f;
+    system->vy[index] = (HashNoise(seedBase + 149) - 0.5f) * system->params.soundSpeed * 0.014f;
+    system->ax[index] = system->flowDrive * profile;
+    system->ay[index] = 0.0f;
+    system->temperature[index] = ClampFloat(
+        system->params.ambientTemperature + (HashNoise(seedBase + 181) - 0.5f) * 0.02f,
+        TEMP_MIN,
+        TEMP_MAX);
+    system->temperatureRate[index] = 0.0f;
+    system->xsphVX[index] = 0.0f;
+    system->xsphVY[index] = 0.0f;
+    system->density[index] = system->params.restDensity;
+    system->pressure[index] = PressureFromState(system, system->density[index], system->temperature[index]);
 }
 
 static void AddSceneForceContribution(const ParticleSystem *system, float x, float y, float vx, float vy,
@@ -1050,16 +1157,28 @@ static void ResolveObstacle(ParticleSystem *system, int index)
         return;
     }
 
-    const float surfaceOffset = system->params.particleRadius * 0.70f;
-    const float signedDistance = ObstacleSignedDistance(system, system->x[index], system->y[index]);
-    if (signedDistance >= surfaceOffset) {
-        return;
+    const float baseSurfaceOffset = system->params.particleRadius *
+        ((system->obstacleModel == OBSTACLE_CAR) ? 1.20f : 0.70f);
+    Vector2 normal = {1.0f, 0.0f};
+    bool resolved = false;
+
+    for (int iteration = 0; iteration < ((system->obstacleModel == OBSTACLE_CAR) ? 4 : 2); ++iteration) {
+        const float signedDistance = ObstacleSignedDistance(system, system->x[index], system->y[index]);
+        if (signedDistance >= baseSurfaceOffset) {
+            break;
+        }
+
+        normal = ObstacleNormal(system, system->x[index], system->y[index]);
+        const float pushOut = (baseSurfaceOffset - signedDistance) +
+            system->params.particleRadius * ((system->obstacleModel == OBSTACLE_CAR) ? 0.18f : 0.08f);
+        system->x[index] += normal.x * pushOut;
+        system->y[index] += normal.y * pushOut;
+        resolved = true;
     }
 
-    const Vector2 normal = ObstacleNormal(system, system->x[index], system->y[index]);
-    const float pushOut = surfaceOffset - signedDistance;
-    system->x[index] += normal.x * pushOut;
-    system->y[index] += normal.y * pushOut;
+    if (!resolved) {
+        return;
+    }
 
     const float vn = system->vx[index] * normal.x + system->vy[index] * normal.y;
     if (vn < 0.0f) {
@@ -1144,6 +1263,9 @@ static void SetObstacleModel(ParticleSystem *system, ObstacleModel obstacleModel
         case OBSTACLE_CAR:
             SetBackendNotice(system, "Obstacle: Car");
             break;
+        case OBSTACLE_RECTANGLE:
+            SetBackendNotice(system, "Obstacle: Rectangle");
+            break;
         case OBSTACLE_CIRCLE:
         default:
             SetBackendNotice(system, "Obstacle: Circle");
@@ -1224,6 +1346,42 @@ static void SetWindSpeedScale(ParticleSystem *system, float flowSpeedScale)
     SetBackendNotice(system, "Wind tunnel speed updated.");
 }
 
+static void SetObstacleAngleDegrees(ParticleSystem *system, float obstacleAngleDegrees)
+{
+    const float clamped = ClampFloat(obstacleAngleDegrees, -180.0f, 180.0f);
+    if (fabsf(system->obstacleAngleDegrees - clamped) < 1e-4f) {
+        return;
+    }
+
+    system->obstacleAngleDegrees = clamped;
+    ConfigureSceneParameters(system);
+    InvalidateGpuBackendState(system);
+}
+
+static void SetObstacleRectangleWidth(ParticleSystem *system, float obstacleRectWidth)
+{
+    const float clamped = ClampFloat(obstacleRectWidth, 40.0f, 360.0f);
+    if (fabsf(system->obstacleRectWidth - clamped) < 1e-4f) {
+        return;
+    }
+
+    system->obstacleRectWidth = clamped;
+    ConfigureSceneParameters(system);
+    InvalidateGpuBackendState(system);
+}
+
+static void SetObstacleRectangleHeight(ParticleSystem *system, float obstacleRectHeight)
+{
+    const float clamped = ClampFloat(obstacleRectHeight, 24.0f, 220.0f);
+    if (fabsf(system->obstacleRectHeight - clamped) < 1e-4f) {
+        return;
+    }
+
+    system->obstacleRectHeight = clamped;
+    ConfigureSceneParameters(system);
+    InvalidateGpuBackendState(system);
+}
+
 #if defined(__APPLE__)
 static NSString *LoadMetalSource(void)
 {
@@ -1257,6 +1415,9 @@ static GpuSimParams MakeGpuSimParams(const ParticleSystem *system, float dt)
     Vector2 speakerCenter = {0.0f, 0.0f};
     Vector2 speakerVelocity = {0.0f, 0.0f};
     Vector2 speakerHalfSize = {0.0f, 0.0f};
+    const float obstacleAngle = ObstacleAngleRadians(system);
+    const float obstacleCos = cosf(obstacleAngle);
+    const float obstacleSin = sinf(obstacleAngle);
     if (AcousticsActive(system)) {
         GetSpeakerState(system, &speakerCenter, &speakerVelocity, &speakerHalfSize);
     }
@@ -1301,6 +1462,10 @@ static GpuSimParams MakeGpuSimParams(const ParticleSystem *system, float dt)
         .obstacleCenterX = system->obstacleCenter.x,
         .obstacleCenterY = system->obstacleCenter.y,
         .obstacleRadius = system->obstacleRadius,
+        .obstacleAngleCos = obstacleCos,
+        .obstacleAngleSin = obstacleSin,
+        .obstacleRectHalfWidth = system->obstacleRectWidth * 0.5f,
+        .obstacleRectHalfHeight = system->obstacleRectHeight * 0.5f,
         .obstacleShell = system->obstacleShell,
         .obstacleStrength = system->obstacleStrength,
         .obstacleDamping = system->obstacleDamping,
@@ -1316,6 +1481,7 @@ static GpuSimParams MakeGpuSimParams(const ParticleSystem *system, float dt)
         .speakerShell = system->speakerShell,
         .speakerStrength = system->speakerStrength,
         .speakerDamping = system->speakerDamping,
+        .simulationTime = system->simulationTime,
         .substepDt = dt,
     };
 }
@@ -1759,7 +1925,7 @@ static GpuSimParams MakeGpuSimParams(const ParticleSystem *system, float dt)
     return [self finishCommandBuffer:simBuffer error:error];
 }
 
-- (BOOL)runIntegrateForSystem:(ParticleSystem *)system dt:(float)dt error:(NSString * _Nullable * _Nullable)error
+- (BOOL)runStepForSystem:(ParticleSystem *)system dt:(float)dt error:(NSString * _Nullable * _Nullable)error
 {
     if (![self prepareForSystem:system error:error]) {
         return NO;
@@ -1768,8 +1934,90 @@ static GpuSimParams MakeGpuSimParams(const ParticleSystem *system, float dt)
     GpuSimParams params = MakeGpuSimParams(system, dt);
     [self writeParams:&params];
 
-    id<MTLCommandBuffer> commandBuffer = [_commandQueue commandBuffer];
-    id<MTLComputeCommandEncoder> encoder = [commandBuffer computeCommandEncoder];
+    id<MTLCommandBuffer> countBuffer = [_commandQueue commandBuffer];
+    id<MTLComputeCommandEncoder> countEncoder = [countBuffer computeCommandEncoder];
+    [countEncoder setBuffer:_cellCountsBuffer offset:0 atIndex:0];
+    [countEncoder setBuffer:_paramsBuffer offset:0 atIndex:1];
+    [self dispatchCount:(NSUInteger)system->cellCount pipeline:_clearCountsPSO encoder:countEncoder];
+
+    [countEncoder setBuffer:_xBuffer offset:0 atIndex:0];
+    [countEncoder setBuffer:_yBuffer offset:0 atIndex:1];
+    [countEncoder setBuffer:_particleCellsBuffer offset:0 atIndex:2];
+    [countEncoder setBuffer:_cellCountsBuffer offset:0 atIndex:3];
+    [countEncoder setBuffer:_paramsBuffer offset:0 atIndex:4];
+    [self dispatchCount:(NSUInteger)system->particleCount pipeline:_computeCellsPSO encoder:countEncoder];
+    [countEncoder endEncoding];
+
+    if (![self finishCommandBuffer:countBuffer error:error]) {
+        return NO;
+    }
+
+    system->cellStarts[0] = 0;
+    for (int cell = 0; cell < system->cellCount; ++cell) {
+        system->cellStarts[cell + 1] = system->cellStarts[cell] + system->cellCounts[cell];
+        system->cellOffsets[cell] = system->cellStarts[cell];
+    }
+
+    id<MTLCommandBuffer> simBuffer = [_commandQueue commandBuffer];
+    id<MTLComputeCommandEncoder> encoder = [simBuffer computeCommandEncoder];
+
+    [encoder setBuffer:_particleCellsBuffer offset:0 atIndex:0];
+    [encoder setBuffer:_cellOffsetsBuffer offset:0 atIndex:1];
+    [encoder setBuffer:_sortedIndicesBuffer offset:0 atIndex:2];
+    [encoder setBuffer:_paramsBuffer offset:0 atIndex:3];
+    [self dispatchCount:(NSUInteger)system->particleCount pipeline:_scatterIndicesPSO encoder:encoder];
+
+    [encoder setBuffer:_sortedIndicesBuffer offset:0 atIndex:0];
+    [encoder setBuffer:_particleCellsBuffer offset:0 atIndex:1];
+    [encoder setBuffer:_xBuffer offset:0 atIndex:2];
+    [encoder setBuffer:_yBuffer offset:0 atIndex:3];
+    [encoder setBuffer:_vxBuffer offset:0 atIndex:4];
+    [encoder setBuffer:_vyBuffer offset:0 atIndex:5];
+    [encoder setBuffer:_temperatureBuffer offset:0 atIndex:6];
+    [encoder setBuffer:_sortedXBuffer offset:0 atIndex:7];
+    [encoder setBuffer:_sortedYBuffer offset:0 atIndex:8];
+    [encoder setBuffer:_sortedVXBuffer offset:0 atIndex:9];
+    [encoder setBuffer:_sortedVYBuffer offset:0 atIndex:10];
+    [encoder setBuffer:_sortedTemperatureBuffer offset:0 atIndex:11];
+    [encoder setBuffer:_sortedCellIndicesBuffer offset:0 atIndex:12];
+    [encoder setBuffer:_paramsBuffer offset:0 atIndex:13];
+    [self dispatchCount:(NSUInteger)system->particleCount pipeline:_gatherSortedPSO encoder:encoder];
+
+    [encoder setBuffer:_sortedXBuffer offset:0 atIndex:0];
+    [encoder setBuffer:_sortedYBuffer offset:0 atIndex:1];
+    [encoder setBuffer:_sortedTemperatureBuffer offset:0 atIndex:2];
+    [encoder setBuffer:_sortedCellIndicesBuffer offset:0 atIndex:3];
+    [encoder setBuffer:_cellStartsBuffer offset:0 atIndex:4];
+    [encoder setBuffer:_cellNeighborCountsBuffer offset:0 atIndex:5];
+    [encoder setBuffer:_cellNeighborsBuffer offset:0 atIndex:6];
+    [encoder setBuffer:_sortedIndicesBuffer offset:0 atIndex:7];
+    [encoder setBuffer:_densityBuffer offset:0 atIndex:8];
+    [encoder setBuffer:_pressureBuffer offset:0 atIndex:9];
+    [encoder setBuffer:_sortedDensityBuffer offset:0 atIndex:10];
+    [encoder setBuffer:_sortedPressureBuffer offset:0 atIndex:11];
+    [encoder setBuffer:_paramsBuffer offset:0 atIndex:12];
+    [self dispatchCount:(NSUInteger)system->particleCount pipeline:_densityPressurePSO encoder:encoder];
+
+    [encoder setBuffer:_sortedIndicesBuffer offset:0 atIndex:0];
+    [encoder setBuffer:_sortedXBuffer offset:0 atIndex:1];
+    [encoder setBuffer:_sortedYBuffer offset:0 atIndex:2];
+    [encoder setBuffer:_sortedVXBuffer offset:0 atIndex:3];
+    [encoder setBuffer:_sortedVYBuffer offset:0 atIndex:4];
+    [encoder setBuffer:_sortedTemperatureBuffer offset:0 atIndex:5];
+    [encoder setBuffer:_sortedDensityBuffer offset:0 atIndex:6];
+    [encoder setBuffer:_sortedPressureBuffer offset:0 atIndex:7];
+    [encoder setBuffer:_sortedCellIndicesBuffer offset:0 atIndex:8];
+    [encoder setBuffer:_cellStartsBuffer offset:0 atIndex:9];
+    [encoder setBuffer:_cellNeighborCountsBuffer offset:0 atIndex:10];
+    [encoder setBuffer:_cellNeighborsBuffer offset:0 atIndex:11];
+    [encoder setBuffer:_axBuffer offset:0 atIndex:12];
+    [encoder setBuffer:_ayBuffer offset:0 atIndex:13];
+    [encoder setBuffer:_temperatureRateBuffer offset:0 atIndex:14];
+    [encoder setBuffer:_xsphVXBuffer offset:0 atIndex:15];
+    [encoder setBuffer:_xsphVYBuffer offset:0 atIndex:16];
+    [encoder setBuffer:_paramsBuffer offset:0 atIndex:17];
+    [self dispatchCount:(NSUInteger)system->particleCount pipeline:_forcePSO encoder:encoder];
+
     [encoder setBuffer:_xBuffer offset:0 atIndex:0];
     [encoder setBuffer:_yBuffer offset:0 atIndex:1];
     [encoder setBuffer:_vxBuffer offset:0 atIndex:2];
@@ -1782,8 +2030,9 @@ static GpuSimParams MakeGpuSimParams(const ParticleSystem *system, float dt)
     [encoder setBuffer:_xsphVYBuffer offset:0 atIndex:9];
     [encoder setBuffer:_paramsBuffer offset:0 atIndex:10];
     [self dispatchCount:(NSUInteger)system->particleCount pipeline:_integratePSO encoder:encoder];
+
     [encoder endEncoding];
-    return [self finishCommandBuffer:commandBuffer error:error];
+    return [self finishCommandBuffer:simBuffer error:error];
 }
 
 @end
@@ -1843,7 +2092,7 @@ static bool RunGpuDensityForce(ParticleSystem *system, bool includeForce)
     return true;
 }
 
-static bool RunGpuIntegrate(ParticleSystem *system, float dt)
+static bool RunGpuStep(ParticleSystem *system, float dt)
 {
     if (!InitializeGpuBackend(system)) {
         return false;
@@ -1851,9 +2100,9 @@ static bool RunGpuIntegrate(ParticleSystem *system, float dt)
 
     MetalGpuBackend *backend = (__bridge MetalGpuBackend *)system->gpuBackend;
     NSString *error = nil;
-    if (![backend runIntegrateForSystem:system dt:dt error:&error]) {
+    if (![backend runStepForSystem:system dt:dt error:&error]) {
         if (error != nil) {
-            fprintf(stderr, "Metal integrate step failed: %s\n", error.UTF8String);
+            fprintf(stderr, "Metal step failed: %s\n", error.UTF8String);
         }
         return false;
     }
@@ -1883,7 +2132,7 @@ static bool RunGpuDensityForce(ParticleSystem *system, bool includeForce)
     return false;
 }
 
-static bool RunGpuIntegrate(ParticleSystem *system, float dt)
+static bool RunGpuStep(ParticleSystem *system, float dt)
 {
     (void)system;
     (void)dt;
@@ -1939,6 +2188,9 @@ static void AllocateSystem(ParticleSystem *system, int maxParticles)
     system->activeBackend = SIM_BACKEND_CPU;
     system->scene = SCENE_TANK;
     system->obstacleModel = OBSTACLE_CIRCLE;
+    system->obstacleAngleDegrees = 0.0f;
+    system->obstacleRectWidth = 158.0f;
+    system->obstacleRectHeight = 62.0f;
     system->tankPreset = MATERIAL_WATER;
     system->gpuBackendAvailable = false;
     system->timeScale = 1.0f;
@@ -2699,13 +2951,11 @@ static void ResolveBounds(ParticleSystem *system, int index)
     const float right = system->bounds.x + system->bounds.width - radius;
     const float top = system->bounds.y + radius;
     const float bottom = system->bounds.y + system->bounds.height - radius;
-    const float width = right - left;
 
     if (SceneIsWindTunnel(system)) {
-        if (system->x[index] < left) {
-            system->x[index] = right - fmodf(left - system->x[index], fmaxf(width, 1.0f));
-        } else if (system->x[index] > right) {
-            system->x[index] = left + fmodf(system->x[index] - right, fmaxf(width, 1.0f));
+        if (system->x[index] < left || system->x[index] > right) {
+            RespawnWindTunnelParticle(system, index);
+            return;
         }
     } else if (system->x[index] < left) {
         system->x[index] = left;
@@ -2901,24 +3151,17 @@ static bool StepSimulationGPU(ParticleSystem *system, float frameDelta)
 
     const double startTime = GetTime();
     while (system->accumulator >= minStep && steps < MAX_SIM_STEPS_PER_FRAME) {
-        if (!RunGpuDensityForce(system, true)) {
-            SetBackendNotice(system, "GPU solver failed. Falling back to CPU.");
+        const float dt = ComputeAdaptiveTimeStep(system, fminf(maxStep, system->accumulator));
+        system->lastStepDt = dt;
+
+        if (!RunGpuStep(system, dt)) {
+            SetBackendNotice(system, "GPU step failed. Falling back to CPU.");
             system->activeBackend = SIM_BACKEND_CPU;
             StepSimulationCPU(system, frameDelta);
             return false;
         }
 
         SampleMicrophone(system);
-        const float dt = ComputeAdaptiveTimeStep(system, fminf(maxStep, system->accumulator));
-        system->lastStepDt = dt;
-
-        if (!RunGpuIntegrate(system, dt)) {
-            SetBackendNotice(system, "GPU integrate failed. Falling back to CPU.");
-            system->activeBackend = SIM_BACKEND_CPU;
-            StepSimulationCPU(system, frameDelta);
-            return false;
-        }
-
         system->simulationTime += dt;
         system->accumulator -= dt;
         ++steps;
@@ -2997,9 +3240,6 @@ static Color ParticleColor(const ParticleSystem *system, int index)
 static void DrawParticles(const ParticleSystem *system)
 {
     const Texture2D texture = (system->viewMode == VIEW_PARTICLES) ? system->particleTexture : system->supportTexture;
-    const float sourceWidth = (float)texture.width;
-    const float sourceHeight = (float)texture.height;
-    const Rectangle source = {0.0f, 0.0f, sourceWidth, sourceHeight};
     const int smoothDrawLimit = SmoothViewDrawLimit(system);
     const int drawStride = (system->viewMode == VIEW_SMOOTHING_RADIUS &&
             system->particleCount > smoothDrawLimit)
@@ -3017,6 +3257,8 @@ static void DrawParticles(const ParticleSystem *system)
         BeginBlendMode(BLEND_ADDITIVE);
     }
 
+    rlSetTexture(texture.id);
+    rlBegin(RL_QUADS);
     for (int i = 0; i < system->particleCount; ++i) {
         if (system->viewMode == VIEW_SMOOTHING_RADIUS && !ShouldDrawSmoothingSample(i, drawStride)) {
             continue;
@@ -3034,8 +3276,23 @@ static void DrawParticles(const ParticleSystem *system)
             diameter,
         };
 
-        DrawTexturePro(texture, source, dest, (Vector2){0.0f, 0.0f}, 0.0f, color);
+        const float left = dest.x;
+        const float right = dest.x + dest.width;
+        const float top = dest.y;
+        const float bottom = dest.y + dest.height;
+
+        rlColor4ub(color.r, color.g, color.b, color.a);
+        rlTexCoord2f(0.0f, 0.0f);
+        rlVertex2f(left, top);
+        rlTexCoord2f(0.0f, 1.0f);
+        rlVertex2f(left, bottom);
+        rlTexCoord2f(1.0f, 1.0f);
+        rlVertex2f(right, bottom);
+        rlTexCoord2f(1.0f, 0.0f);
+        rlVertex2f(right, top);
     }
+    rlEnd();
+    rlSetTexture(0);
 
     if (system->viewMode == VIEW_SMOOTHING_RADIUS) {
         EndBlendMode();
@@ -3043,6 +3300,117 @@ static void DrawParticles(const ParticleSystem *system)
 
     if (system->mouseActive) {
         DrawCircleLines((int)system->mousePosition.x, (int)system->mousePosition.y, system->mouseRadius, (Color){255, 244, 176, 210});
+    }
+}
+
+static float PolygonSignedArea(const Vector2 *points, int pointCount)
+{
+    float area = 0.0f;
+    for (int i = 0; i < pointCount; ++i) {
+        const Vector2 a = points[i];
+        const Vector2 b = points[(i + 1) % pointCount];
+        area += a.x * b.y - b.x * a.y;
+    }
+    return 0.5f * area;
+}
+
+static bool PointInTriangle(Vector2 p, Vector2 a, Vector2 b, Vector2 c)
+{
+    const float ab = (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x);
+    const float bc = (c.x - b.x) * (p.y - b.y) - (c.y - b.y) * (p.x - b.x);
+    const float ca = (a.x - c.x) * (p.y - c.y) - (a.y - c.y) * (p.x - c.x);
+    const bool hasNeg = (ab < -1e-5f) || (bc < -1e-5f) || (ca < -1e-5f);
+    const bool hasPos = (ab > 1e-5f) || (bc > 1e-5f) || (ca > 1e-5f);
+    return !(hasNeg && hasPos);
+}
+
+static bool PolygonVertexIsEar(const Vector2 *points, const int *indices, int remainingCount, int vertex,
+    float orientationSign)
+{
+    const int prevIndex = indices[(vertex + remainingCount - 1) % remainingCount];
+    const int currIndex = indices[vertex];
+    const int nextIndex = indices[(vertex + 1) % remainingCount];
+    const Vector2 a = points[prevIndex];
+    const Vector2 b = points[currIndex];
+    const Vector2 c = points[nextIndex];
+    const float cross = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+
+    if (cross * orientationSign <= 1e-5f) {
+        return false;
+    }
+
+    for (int i = 0; i < remainingCount; ++i) {
+        const int testIndex = indices[i];
+        if (testIndex == prevIndex || testIndex == currIndex || testIndex == nextIndex) {
+            continue;
+        }
+        if (PointInTriangle(points[testIndex], a, b, c)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static void DrawObstaclePolygon(const ParticleSystem *system, const Vector2 *localPoints, int pointCount,
+    Color fill, Color outline)
+{
+    Vector2 points[128];
+    int indices[128];
+    if (pointCount > (int)(sizeof(points) / sizeof(points[0]))) {
+        pointCount = (int)(sizeof(points) / sizeof(points[0]));
+    }
+
+    for (int i = 0; i < pointCount; ++i) {
+        points[i] = ObstacleLocalToWorld(system, localPoints[i]);
+        indices[i] = i;
+    }
+
+    int remainingCount = pointCount;
+    const float orientationSign = (PolygonSignedArea(points, pointCount) >= 0.0f) ? 1.0f : -1.0f;
+    int guard = 0;
+    while (remainingCount > 2 && guard < 512) {
+        bool clippedEar = false;
+        for (int i = 0; i < remainingCount; ++i) {
+            if (!PolygonVertexIsEar(points, indices, remainingCount, i, orientationSign)) {
+                continue;
+            }
+
+            const int prevIndex = indices[(i + remainingCount - 1) % remainingCount];
+            const int currIndex = indices[i];
+            const int nextIndex = indices[(i + 1) % remainingCount];
+            DrawTriangle(points[prevIndex], points[currIndex], points[nextIndex], fill);
+
+            for (int shift = i; shift < remainingCount - 1; ++shift) {
+                indices[shift] = indices[shift + 1];
+            }
+            remainingCount -= 1;
+            clippedEar = true;
+            break;
+        }
+
+        if (!clippedEar) {
+            break;
+        }
+        ++guard;
+    }
+
+    if (remainingCount > 2) {
+        Vector2 fillCenter = {0.0f, 0.0f};
+        for (int i = 0; i < pointCount; ++i) {
+            fillCenter.x += points[i].x;
+            fillCenter.y += points[i].y;
+        }
+        fillCenter.x /= (float)pointCount;
+        fillCenter.y /= (float)pointCount;
+        for (int i = 0; i < pointCount; ++i) {
+            const int next = (i + 1) % pointCount;
+            DrawTriangle(fillCenter, points[i], points[next], fill);
+        }
+    }
+
+    for (int i = 0; i < pointCount; ++i) {
+        const int next = (i + 1) % pointCount;
+        DrawLineEx(points[i], points[next], 2.0f, outline);
     }
 }
 
@@ -3057,42 +3425,39 @@ static void DrawObstacle(const ParticleSystem *system)
 
     switch (system->obstacleModel) {
         case OBSTACLE_AIRFOIL: {
-            Vector2 points[AIRFOIL_OUTLINE_POINT_COUNT];
             const int pointCount = AIRFOIL_OUTLINE_POINT_COUNT;
             const float r = system->obstacleRadius;
+            Vector2 localPoints[128];
             for (int i = 0; i < pointCount; ++i) {
-                points[i] = (Vector2){
-                    system->obstacleCenter.x + AIRFOIL_OUTLINE_POINTS[i].x * r,
-                    system->obstacleCenter.y - AIRFOIL_OUTLINE_POINTS[i].y * r,
+                localPoints[i] = (Vector2){
+                    AIRFOIL_OUTLINE_POINTS[i].x * r,
+                    -AIRFOIL_OUTLINE_POINTS[i].y * r,
                 };
             }
-            for (int i = 0; i < pointCount; ++i) {
-                const int next = (i + 1) % pointCount;
-                DrawTriangle(system->obstacleCenter, points[i], points[next], fill);
-            }
-            for (int i = 0; i < pointCount; ++i) {
-                const int next = (i + 1) % pointCount;
-                DrawLineEx(points[i], points[next], 2.0f, outline);
-            }
+            DrawObstaclePolygon(system, localPoints, pointCount, fill, outline);
         } break;
         case OBSTACLE_CAR: {
             const float r = system->obstacleRadius;
-            Vector2 points[CAR_OUTLINE_POINT_COUNT];
             const int pointCount = CAR_OUTLINE_POINT_COUNT;
+            Vector2 localPoints[128];
             for (int i = 0; i < pointCount; ++i) {
-                points[i] = (Vector2){
-                    system->obstacleCenter.x + CAR_OUTLINE_POINTS[i].x * r,
-                    system->obstacleCenter.y + CAR_OUTLINE_POINTS[i].y * r,
+                localPoints[i] = (Vector2){
+                    CAR_OUTLINE_POINTS[i].x * r,
+                    CAR_OUTLINE_POINTS[i].y * r,
                 };
             }
-            for (int i = 0; i < pointCount; ++i) {
-                const int next = (i + 1) % pointCount;
-                DrawTriangle(system->obstacleCenter, points[i], points[next], fill);
-            }
-            for (int i = 0; i < pointCount; ++i) {
-                const int next = (i + 1) % pointCount;
-                DrawLineEx(points[i], points[next], 2.0f, outline);
-            }
+            DrawObstaclePolygon(system, localPoints, pointCount, fill, outline);
+        } break;
+        case OBSTACLE_RECTANGLE: {
+            const float halfWidth = system->obstacleRectWidth * 0.5f;
+            const float halfHeight = system->obstacleRectHeight * 0.5f;
+            const Vector2 localPoints[4] = {
+                {-halfWidth, -halfHeight},
+                {halfWidth, -halfHeight},
+                {halfWidth, halfHeight},
+                {-halfWidth, halfHeight},
+            };
+            DrawObstaclePolygon(system, localPoints, 4, fill, outline);
         } break;
         case OBSTACLE_CIRCLE:
         default:
@@ -3142,23 +3507,32 @@ static void DrawAcousticRig(const ParticleSystem *system)
 
 static void DrawHud(const ParticleSystem *system)
 {
-    (void)system;
+    static const char *const colorModeLabels[] = {
+        "Material",
+        "Temperature",
+        "Pressure",
+        "Speed",
+        "Density",
+    };
+
+    const char *label = colorModeLabels[ClampInt((int)system->colorMode, 0, COLOR_MODE_COUNT - 1)];
+    const int fontSize = 22;
+    const int paddingX = 14;
+    const int paddingY = 9;
+    const int textWidth = MeasureText(label, fontSize);
+    const int boxWidth = textWidth + paddingX * 2;
+    const int boxHeight = fontSize + paddingY * 2;
+    const int boxX = WINDOW_WIDTH - boxWidth - 18;
+    const int boxY = 18;
+    const Rectangle box = {(float)boxX, (float)boxY, (float)boxWidth, (float)boxHeight};
+    DrawRectangleRec(box, (Color){9, 18, 34, 208});
+    DrawRectangleLinesEx(box, 1.5f, (Color){66, 124, 184, 235});
+    DrawText(label, boxX + paddingX, boxY + paddingY, fontSize, (Color){232, 242, 255, 255});
 }
 
 static void DrawBackendNotice(const ParticleSystem *system)
 {
-    if (system->backendNotice == NULL || GetTime() >= system->backendNoticeUntil) {
-        return;
-    }
-
-    const int noticeWidth = 460;
-    const int noticeHeight = 42;
-    const int noticeX = WINDOW_WIDTH - noticeWidth - 18;
-    const int noticeY = 18;
-    const Rectangle noticeRect = {(float)noticeX, (float)noticeY, (float)noticeWidth, (float)noticeHeight};
-    DrawRectangleRounded(noticeRect, 0.18f, 10, (Color){34, 24, 12, 220});
-    DrawRectangleRoundedLinesEx(noticeRect, 0.18f, 10, 1.5f, (Color){255, 210, 124, 220});
-    DrawText(system->backendNotice, noticeX + 14, noticeY + 11, 18, (Color){255, 235, 190, 255});
+    (void)system;
 }
 
 static void ApplyTargetCountPreset(ParticleSystem *system, int targetParticleCount)
@@ -3331,11 +3705,17 @@ static UiPanelState BuildUiPanelState(const ParticleSystem *system)
         .actualParticleCount = system->particleCount,
         .mode = (int)CurrentUiMode(system),
         .obstacleModel = (int)system->obstacleModel,
+        .obstacleAngleDegrees = system->obstacleAngleDegrees,
+        .obstacleRectWidth = system->obstacleRectWidth,
+        .obstacleRectHeight = system->obstacleRectHeight,
         .viewMode = (int)system->viewMode,
         .colorMode = (int)system->colorMode,
         .paused = system->paused,
         .gpuBackendAvailable = system->gpuBackendAvailable,
         .windSpeedScale = system->flowSpeedScale,
+        .flowMach = SceneIsWindTunnel(system)
+            ? (system->flowTargetSpeed / fmaxf(system->params.soundSpeed, 1e-4f))
+            : 0.0f,
         .acousticsAvailable = AcousticsAvailable(system),
         .acousticsEnabled = system->acousticsEnabled,
         .speakerFrequency = system->speakerFrequency,
@@ -3413,6 +3793,18 @@ static void ApplyUiPanelActions(ParticleSystem *system, const UiPanelActions *ac
 
     if (actions->setObstacleModel) {
         SetObstacleModel(system, (ObstacleModel)actions->obstacleModel);
+    }
+
+    if (actions->setObstacleAngleDegrees) {
+        SetObstacleAngleDegrees(system, actions->obstacleAngleDegrees);
+    }
+
+    if (actions->setObstacleRectWidth) {
+        SetObstacleRectangleWidth(system, actions->obstacleRectWidth);
+    }
+
+    if (actions->setObstacleRectHeight) {
+        SetObstacleRectangleHeight(system, actions->obstacleRectHeight);
     }
 
     if (actions->setViewMode) {
@@ -3675,7 +4067,7 @@ int main(void)
         DrawBackendNotice(&system);
 
         if (system.paused) {
-            DrawText("PAUSED", WINDOW_WIDTH - 150, 24, 28, (Color){255, 215, 90, 255});
+            DrawText("PAUSED", WINDOW_WIDTH / 2 - 54, 24, 28, (Color){255, 215, 90, 255});
         }
 
         UiPanelEnd();
