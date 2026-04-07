@@ -22,15 +22,13 @@ make
 make run
 ```
 
-## Images In README
-
-Store screenshots or diagrams in an `assets/` folder and reference them with normal Markdown:
-
+## Screenshots
 ```md
 ![Wind tunnel](assets/wind-tunnel.png)
-```
+![Gas](assets/gassim.png)
+![Fluid](assets/fluid.png)
 
-GitHub renders relative image paths automatically as long as the image file is committed to the repo.
+```
 
 ## Controls
 
