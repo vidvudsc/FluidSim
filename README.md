@@ -22,13 +22,18 @@ make
 make run
 ```
 
-## Screenshots
-```md
-![Wind tunnel](assets/wind-tunnel.png)
+### Gas mode
+
 ![Gas](assets/gassim.png)
+
+### Wind tunnel mode
+
+![Wind tunnel](assets/wind-tunnel.png)
+
+### Fluid mode
+
 ![Fluid](assets/fluid.png)
 
-```
 
 ## Controls
 
