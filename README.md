@@ -1,4 +1,4 @@
-# GasSim
+# FluidSim
 
 2D smoothed-particle hydrodynamics demo in C with Raylib.
 
@@ -21,6 +21,16 @@ make
 ```bash
 make run
 ```
+
+## Images In README
+
+Store screenshots or diagrams in an `assets/` folder and reference them with normal Markdown:
+
+```md
+![Wind tunnel](assets/wind-tunnel.png)
+```
+
+GitHub renders relative image paths automatically as long as the image file is committed to the repo.
 
 ## Controls
 
